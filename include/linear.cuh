@@ -14,5 +14,16 @@ class Linear {
         Linear(size_t in_features, size_t out_features);
 
         //Tensor already deltes the copy at this point
-        
-}
+        Linear(const Linear&)=delete;
+        Linear& operator=(const Linear&) = delete;
+
+        //move
+        Linear(Linear&&) = default;
+        Linear& operator=(Linear&&)=default;
+
+        //Initializing weights with xavier uniform
+        void xavier_init();
+
+        //Move both weights and bias to GPU
+        void to_gpu();
+};
