@@ -21,4 +21,8 @@ class Network {
 
         //full forward pass on CPU
         Tensor<T> forward_cpu(Tensor<T>& input, size_t batch_size);
+        
+        //forward pass on GPU
+        Tensor<T> forward_gpu(Tensor<T>& input, size_t batch_size);
+
 };

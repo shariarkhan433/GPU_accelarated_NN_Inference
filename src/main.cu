@@ -1,38 +1,51 @@
 #include <iostream>
 #include <iomanip>
+#include <cmath>
 #include "../include/network.cuh"
 
 int main() {
     Network<float> net;
-    std::cout << "Network created\n";
-    std::cout << "fc1 weights device: "
-              << (net.fc1.weights.device == Device::CPU ? "CPU" : "GPU") << "\n";
 
-    // Fake input: batch of 2 MNIST-shaped images [2, 784]
-    // All zeros — we just want to verify the forward pass runs
-    Tensor<float> input(2 * 784, Device::CPU);
-    input.fill(0.0f);
+    // Input: batch of 4, all 0.1f
+    Tensor<float> input_cpu(4 * 784, Device::CPU);
+    for (size_t i = 0; i < input_cpu.size; i++)
+        input_cpu.data[i] = 0.1f;
 
-    // Run forward pass
-    Tensor<float> output = net.forward_cpu(input, 2);
+    // CPU forward pass
+    Tensor<float> cpu_out = net.forward_cpu(input_cpu, 4);
+    std::cout << "CPU output (sample 0):\n";
+    for (size_t i = 0; i < 10; i++)
+        std::cout << std::fixed << std::setprecision(4)
+                  << cpu_out.data[i] << " ";
+    std::cout << "\n";
 
-    // Output should be [2, 10] probabilities
-    std::cout << "\nOutput probabilities [2 samples, 10 classes]:\n";
-    for (size_t b = 0; b < 2; b++) {
-        std::cout << "Sample " << b << ": ";
-        float sum = 0;
-        for (size_t i = 0; i < 10; i++) {
-            float val = output.data[b * 10 + i];
-            std::cout << std::fixed << std::setprecision(3) << val << " ";
-            sum += val;
-        }
-        std::cout << "| sum=" << std::fixed << std::setprecision(4) << sum << "\n";
-    }
-
-    // Move to GPU
+    // Move network and input to GPU
     net.to_gpu();
-    std::cout << "\nfc1 weights device after to_gpu(): "
-              << (net.fc1.weights.device == Device::CPU ? "CPU" : "GPU") << "\n";
+    Tensor<float> input_gpu(4 * 784, Device::GPU);
+    // Copy input to GPU
+    Tensor<float> input_cpu2(4 * 784, Device::CPU);
+    for (size_t i = 0; i < input_cpu2.size; i++)
+        input_cpu2.data[i] = 0.1f;
+    input_cpu2.to_gpu();
+
+    // GPU forward pass
+    Tensor<float> gpu_out = net.forward_gpu(input_cpu2, 4);
+
+    // Bring GPU output back to CPU to compare
+    gpu_out.to_cpu();
+    std::cout << "GPU output (sample 0):\n";
+    for (size_t i = 0; i < 10; i++)
+        std::cout << std::fixed << std::setprecision(4)
+                  << gpu_out.data[i] << " ";
+    std::cout << "\n";
+
+    // Check max difference between CPU and GPU outputs
+    float max_diff = 0;
+    for (size_t i = 0; i < 10; i++)
+        max_diff = std::max(max_diff,
+                   std::abs(cpu_out.data[i] - gpu_out.data[i]));
+    std::cout << "\nMax difference CPU vs GPU: " << max_diff << "\n";
+    std::cout << (max_diff < 1e-4 ? "PASS" : "FAIL") << "\n";
 
     return 0;
 }
