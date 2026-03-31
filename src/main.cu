@@ -1,50 +1,38 @@
 #include <iostream>
-#include "../include/tensor.cuh"
-#include "../include/linear.cuh"
-#include "../include/activations.cuh"
-
-void print_tensor(const char* label, Tensor<float>& t) {
-    std::cout << label << ": ";
-    for (size_t i = 0; i < t.size; i++)
-        std::cout << t.data[i] << " ";
-    std::cout << "\n";
-}
+#include <iomanip>
+#include "../include/network.cuh"
 
 int main() {
-    // --- ReLU test ---
-    Tensor<float> x(6, Device::CPU);
-    // manually set mixed positive/negative values
-    float vals[] = {-2.0f, -0.5f, 0.0f, 0.5f, 1.5f, 3.0f};
-    for (size_t i = 0; i < 6; i++) x.data[i] = vals[i];
+    Network<float> net;
+    std::cout << "Network created\n";
+    std::cout << "fc1 weights device: "
+              << (net.fc1.weights.device == Device::CPU ? "CPU" : "GPU") << "\n";
 
-    print_tensor("Before ReLU", x);
-    ReLU<float> relu;
-    relu.forward_cpu(x);
-    print_tensor("After ReLU ", x);
+    // Fake input: batch of 2 MNIST-shaped images [2, 784]
+    // All zeros — we just want to verify the forward pass runs
+    Tensor<float> input(2 * 784, Device::CPU);
+    input.fill(0.0f);
 
-    // --- Softmax test ---
-    // 2 samples, 3 classes each → batch_size=2, out_features=3
-    Tensor<float> logits(6, Device::CPU);
-    float raw[] = {1.0f, 2.0f, 3.0f,   // sample 1 — class 2 should dominate
-                   0.5f, 0.5f, 0.1f};  // sample 2 — classes 0 and 1 tied
-    for (size_t i = 0; i < 6; i++) logits.data[i] = raw[i];
+    // Run forward pass
+    Tensor<float> output = net.forward_cpu(input, 2);
 
-    print_tensor("Before Softmax", logits);
-    Softmax<float> softmax(3);
-    softmax.forward_cpu(logits, 2);
-    print_tensor("After Softmax ", logits);
+    // Output should be [2, 10] probabilities
+    std::cout << "\nOutput probabilities [2 samples, 10 classes]:\n";
+    for (size_t b = 0; b < 2; b++) {
+        std::cout << "Sample " << b << ": ";
+        float sum = 0;
+        for (size_t i = 0; i < 10; i++) {
+            float val = output.data[b * 10 + i];
+            std::cout << std::fixed << std::setprecision(3) << val << " ";
+            sum += val;
+        }
+        std::cout << "| sum=" << std::fixed << std::setprecision(4) << sum << "\n";
+    }
 
-    // Verify: each row must sum to 1.0
-    float sum0 = logits.data[0] + logits.data[1] + logits.data[2];
-    float sum1 = logits.data[3] + logits.data[4] + logits.data[5];
-    std::cout << "Row 0 sum: " << sum0 << " (must be 1.0)\n";
-    std::cout << "Row 1 sum: " << sum1 << " (must be 1.0)\n";
-
-    // --- Linear layer still works ---
-    Linear<float> layer(3, 2);
-    layer.to_gpu();
-    std::cout << "\nLinear layer on GPU: "
-              << (layer.weights.device == Device::GPU ? "yes" : "no") << "\n";
+    // Move to GPU
+    net.to_gpu();
+    std::cout << "\nfc1 weights device after to_gpu(): "
+              << (net.fc1.weights.device == Device::CPU ? "CPU" : "GPU") << "\n";
 
     return 0;
 }
