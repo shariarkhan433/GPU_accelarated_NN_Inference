@@ -1,6 +1,8 @@
 #include "../include/network.cuh"
+#include <iostream>
 #include <stdexcept>
-#include "../include/kernels.cuh" // <-- newly added
+#include "../include/kernels.cuh" 
+#include "../include/npy.cuh"
 
 template <typename T>
 Network<T>::Network()
@@ -16,6 +18,28 @@ void Network<T>::to_gpu(){
     fc1.to_gpu();
     fc2.to_gpu();
     fc3.to_gpu();
+}
+
+template <typename T>
+void Network<T>::load_weights(const std::string& dir) {
+    std::vector<size_t> shape;
+
+    // Load into CPU tensors first, then copy into existing layer tensors
+    auto load_into = [&](Tensor<T>& dst, const std::string& path) {
+        Tensor<float> src = load_npy(path, shape);
+        if (src.size != dst.size)
+            throw std::runtime_error("Shape mismatch loading: " + path);
+        memcpy(dst.data, src.data, dst.size * sizeof(float));
+    };
+
+    load_into(fc1.weights, dir + "/fc1_w.npy");
+    load_into(fc1.bias,    dir + "/fc1_b.npy");
+    load_into(fc2.weights, dir + "/fc2_w.npy");
+    load_into(fc2.bias,    dir + "/fc2_b.npy");
+    load_into(fc3.weights, dir + "/fc3_w.npy");
+    load_into(fc3.bias,    dir + "/fc3_b.npy");
+
+    std::cout << "Weights loaded from " << dir << "\n";
 }
 
 // CPU matrix multiplication:: out [b, j]= sum_k(in[b,k]*w[j,k]+bias[j])

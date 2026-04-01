@@ -2,6 +2,7 @@
 #include "linear.cuh"
 #include "activations.cuh"
 #include <vector>
+#include "npy.cuh"
 
 template <typename T>
 class Network {
@@ -24,5 +25,7 @@ class Network {
         
         //forward pass on GPU
         Tensor<T> forward_gpu(Tensor<T>& input, size_t batch_size);
+
+        void load_weights(const std::string& dir);
 
 };

@@ -3,71 +3,93 @@
 #include <cmath>
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
-#include "../include/tensor.cuh"
-#include "../include/kernels.cuh"
-
-float elapsed_ms(cudaEvent_t start, cudaEvent_t stop) {
-    float ms;
-    cudaEventElapsedTime(&ms, start, stop);
-    return ms;
-}
-
-void bench_shape(cublasHandle_t handle, int batch, int in_f, int out_f) {
-    Tensor<float> A(batch * in_f,  Device::GPU);
-    Tensor<float> B(out_f * in_f,  Device::GPU);
-    Tensor<float> bias(out_f,      Device::GPU);
-    Tensor<float> C(batch * out_f, Device::GPU);
-
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-
-    const int RUNS = 50;
-    float bytes = (float)(batch*in_f + out_f*in_f + batch*out_f) * sizeof(float);
-
-    auto bench = [&](auto fn) {
-        for (int i = 0; i < 5; i++) fn();  // warmup
-        cudaEventRecord(start);
-        for (int i = 0; i < RUNS; i++) fn();
-        cudaEventRecord(stop);
-        cudaEventSynchronize(stop);
-        return elapsed_ms(start, stop) / RUNS;
-    };
-
-    float naive_ms  = bench([&]{ launch_matmul_naive (A.data, B.data, bias.data, C.data, batch, in_f, out_f); });
-    float tiled_ms  = bench([&]{ launch_matmul_tiled (A.data, B.data, bias.data, C.data, batch, in_f, out_f); });
-    float cublas_ms = bench([&]{ launch_matmul_cublas(handle, A.data, B.data, bias.data, C.data, batch, in_f, out_f); });
-
-    auto bw = [&](float ms) { return (bytes / 1e9f) / (ms / 1000.0f); };
-
-    std::cout << "[" << batch << "x" << in_f << "] x ["
-              << out_f << "x" << in_f << "]\n";
-    std::cout << "  Naive:   " << std::fixed << std::setprecision(3)
-              << naive_ms  << " ms  " << std::setprecision(1) << bw(naive_ms)  << " GB/s\n";
-    std::cout << "  Tiled:   " << std::setprecision(3)
-              << tiled_ms  << " ms  " << std::setprecision(1) << bw(tiled_ms)  << " GB/s\n";
-    std::cout << "  cuBLAS:  " << std::setprecision(3)
-              << cublas_ms << " ms  " << std::setprecision(1) << bw(cublas_ms) << " GB/s\n";
-    std::cout << "  Speedup vs naive:  " << std::setprecision(2)
-              << naive_ms / cublas_ms << "x\n";
-    std::cout << "  Speedup vs tiled:  "
-              << tiled_ms / cublas_ms << "x\n\n";
-
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-}
+#include "../include/network.cuh"
+#include "../include/npy.cuh"
 
 int main() {
-    cublasHandle_t handle;
-    cublasCreate(&handle);
+    // --- Load test data ---
+    std::vector<size_t> shape;
+    Tensor<float> images = load_npy("weights/test_images.npy", shape);
+    std::cout << "Test images: [" << shape[0] << ", " << shape[1] << "]\n";
 
-    std::cout << "=== Matmul Benchmark: Naive vs Tiled vs cuBLAS ===\n\n";
+    Tensor<float> labels_f = load_npy("weights/test_labels.npy", shape);
+    std::cout << "Test labels: [" << shape[0] << "]\n";
 
-    bench_shape(handle, 1024, 784,  128);
-    bench_shape(handle, 1024, 128,  64);
-    bench_shape(handle, 4096, 1024, 1024);
-    bench_shape(handle, 8192, 2048, 512);
+    size_t n_samples = 1000;
 
-    cublasDestroy(handle);
+    // Convert float labels to int
+    std::vector<int> labels(n_samples);
+    for (size_t i = 0; i < n_samples; i++)
+        labels[i] = (int)labels_f.data[i];
+
+    // --- Build network and load weights ---
+    Network<float> net;
+    net.load_weights("weights");
+    
+// Debug: print first 5 weights of fc1
+std::cout << "fc1 w[0..4]: ";
+for (int i = 0; i < 5; i++)
+    std::cout << net.fc1.weights.data[i] << " ";
+std::cout << "\n";
+
+// Debug: print first 5 values of test image 0
+std::cout << "image[0][0..4]: ";
+for (int i = 0; i < 5; i++)
+    std::cout << images.data[i] << " ";
+std::cout << "\n";
+    // --- CPU inference ---
+    Tensor<float> cpu_out = net.forward_cpu(images, n_samples);
+
+    int cpu_correct = 0;
+    for (size_t i = 0; i < n_samples; i++) {
+        // Find argmax of output row i
+        int pred = 0;
+        float best = cpu_out.data[i * 10];
+        for (int j = 1; j < 10; j++) {
+            if (cpu_out.data[i * 10 + j] > best) {
+                best = cpu_out.data[i * 10 + j];
+                pred = j;
+            }
+        }
+        if (pred == labels[i]) cpu_correct++;
+    }
+    std::cout << "\nCPU inference:\n";
+    std::cout << "  Correct: " << cpu_correct << "/" << n_samples << "\n";
+    std::cout << "  Accuracy: " << std::fixed << std::setprecision(2)
+              << (cpu_correct * 100.0f / n_samples) << "%\n";
+
+    // --- GPU inference ---
+    net.to_gpu();
+    images.to_gpu();
+    Tensor<float> gpu_out = net.forward_gpu(images, n_samples);
+    gpu_out.to_cpu();
+
+    int gpu_correct = 0;
+    for (size_t i = 0; i < n_samples; i++) {
+        int pred = 0;
+        float best = gpu_out.data[i * 10];
+        for (int j = 1; j < 10; j++) {
+            if (gpu_out.data[i * 10 + j] > best) {
+                best = gpu_out.data[i * 10 + j];
+                pred = j;
+            }
+        }
+        if (pred == labels[i]) gpu_correct++;
+    }
+    std::cout << "\nGPU inference:\n";
+    std::cout << "  Correct: " << gpu_correct << "/" << n_samples << "\n";
+    std::cout << "  Accuracy: " << std::fixed << std::setprecision(2)
+              << (gpu_correct * 100.0f / n_samples) << "%\n";
+
+    // --- Summary ---
+    std::cout << "\n=== Summary ===\n";
+    std::cout << "PyTorch baseline: 97.34%\n";
+    std::cout << "CPU inference:    " << std::fixed << std::setprecision(2)
+              << (cpu_correct * 100.0f / n_samples) << "%\n";
+    std::cout << "GPU inference:    "
+              << (gpu_correct * 100.0f / n_samples) << "%\n";
+    std::cout << "CPU==GPU: "
+              << (cpu_correct == gpu_correct ? "yes" : "no") << "\n";
+
     return 0;
 }
