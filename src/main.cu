@@ -3,49 +3,75 @@
 #include <cmath>
 #include "../include/network.cuh"
 
+// Returns milliseconds between two CUDA events
+float cuda_time_ms(cudaEvent_t start, cudaEvent_t stop) {
+    float ms;
+    cudaEventElapsedTime(&ms, start, stop);
+    return ms;
+}
+
 int main() {
+    const size_t BATCH = 1024;  // large enough to measure
+
     Network<float> net;
-
-    // Input: batch of 4, all 0.1f
-    Tensor<float> input_cpu(4 * 784, Device::CPU);
-    for (size_t i = 0; i < input_cpu.size; i++)
-        input_cpu.data[i] = 0.1f;
-
-    // CPU forward pass
-    Tensor<float> cpu_out = net.forward_cpu(input_cpu, 4);
-    std::cout << "CPU output (sample 0):\n";
-    for (size_t i = 0; i < 10; i++)
-        std::cout << std::fixed << std::setprecision(4)
-                  << cpu_out.data[i] << " ";
-    std::cout << "\n";
-
-    // Move network and input to GPU
     net.to_gpu();
-    Tensor<float> input_gpu(4 * 784, Device::GPU);
-    // Copy input to GPU
-    Tensor<float> input_cpu2(4 * 784, Device::CPU);
-    for (size_t i = 0; i < input_cpu2.size; i++)
-        input_cpu2.data[i] = 0.1f;
-    input_cpu2.to_gpu();
 
-    // GPU forward pass
-    Tensor<float> gpu_out = net.forward_gpu(input_cpu2, 4);
+    // Build input on GPU
+    Tensor<float> input(BATCH * 784, Device::CPU);
+    for (size_t i = 0; i < input.size; i++)
+        input.data[i] = 0.01f * (i % 100);
+    input.to_gpu();
 
-    // Bring GPU output back to CPU to compare
+    // Warmup — GPU needs a few runs to reach stable clock speed
+    for (int i = 0; i < 3; i++)
+        net.forward_gpu(input, BATCH);
+
+    // Time it with CUDA events
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    const int RUNS = 20;
+    cudaEventRecord(start);
+    for (int i = 0; i < RUNS; i++)
+        net.forward_gpu(input, BATCH);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    float total_ms = cuda_time_ms(start, stop);
+    float avg_ms   = total_ms / RUNS;
+
+    std::cout << "Batch size:       " << BATCH << "\n";
+    std::cout << "Runs:             " << RUNS << "\n";
+    std::cout << "Avg forward pass: " << std::fixed
+              << std::setprecision(3) << avg_ms << " ms\n";
+    std::cout << "Throughput:       "
+              << (int)(BATCH / (avg_ms / 1000.0f))
+              << " samples/sec\n";
+
+    // Correctness check on smaller batch
+    Network<float> net2;
+    Tensor<float> in_cpu(64 * 784, Device::CPU);
+    for (size_t i = 0; i < in_cpu.size; i++)
+        in_cpu.data[i] = 0.01f * (i % 100);
+    Tensor<float> cpu_out = net2.forward_cpu(in_cpu, 64);
+
+    net2.to_gpu();
+    Tensor<float> in_gpu(64 * 784, Device::CPU);
+    for (size_t i = 0; i < in_gpu.size; i++)
+        in_gpu.data[i] = 0.01f * (i % 100);
+    in_gpu.to_gpu();
+    Tensor<float> gpu_out = net2.forward_gpu(in_gpu, 64);
     gpu_out.to_cpu();
-    std::cout << "GPU output (sample 0):\n";
-    for (size_t i = 0; i < 10; i++)
-        std::cout << std::fixed << std::setprecision(4)
-                  << gpu_out.data[i] << " ";
-    std::cout << "\n";
 
-    // Check max difference between CPU and GPU outputs
     float max_diff = 0;
-    for (size_t i = 0; i < 10; i++)
+    for (size_t i = 0; i < 64 * 10; i++)
         max_diff = std::max(max_diff,
                    std::abs(cpu_out.data[i] - gpu_out.data[i]));
-    std::cout << "\nMax difference CPU vs GPU: " << max_diff << "\n";
-    std::cout << (max_diff < 1e-4 ? "PASS" : "FAIL") << "\n";
+    std::cout << "\nCorrectness max diff: " << max_diff << "\n";
+    std::cout << (max_diff < 1e-4f ? "PASS" : "FAIL") << "\n";
 
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
     return 0;
 }

@@ -92,4 +92,52 @@ Tensor<T> Network<T>::forward_cpu(Tensor<T>& input, size_t batch_size) {
     return out3;  // move semantics kicks in here — no copy
 }
 
+
+// ReLU kernel — simplest possible, one thread per element
+
+__global__ void relu_kernel(float* x, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    x[i] = x[i] > 0 ? x[i] : 0;
+}
+
+void launch_relu(float* x, int n) {
+    int block = 256;
+    int grid = (n + block - 1) / block;
+    relu_kernel<<<grid, block>>>(x,n);
+    cudaDeviceSynchronize();
+}
+
+// Softmax kernel — one thread per row (one sample)
+// Fine for small n_classes (<=1000), which covers MNIST
+__global__ void softmax_kernel(float* x, int batch_size, int n_classes) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= batch_size) return;
+
+    float* r = x + row * n_classes;
+
+    // Step 1: find max for numerical stability
+    float max_val = r[0];
+    for (int i = 1; i < n_classes; i++)
+        max_val = r[i] > max_val ? r[i] : max_val;
+
+    // Step 2: exp and sum
+    float sum = 0;
+    for (int i = 0; i < n_classes; i++) {
+        r[i] = expf(r[i] - max_val);
+        sum += r[i];
+    }
+
+    // Step 3: normalize
+    for (int i = 0; i < n_classes; i++)
+        r[i] /= sum;
+}
+
+void launch_softmax(float* x, int batch_size, int n_classes) {
+    int block = 256;
+    int grid = (batch_size + block - 1) / block;
+    softmax_kernel<<<grid, block>>>(x, batch_size, n_classes);
+    cudaDeviceSynchronize();
+}
+
 template class Network<float>;
