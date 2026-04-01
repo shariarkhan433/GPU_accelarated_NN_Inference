@@ -2,8 +2,58 @@
 // #include <__clang_cuda_runtime_wrapper.h>
 #include <cuda_runtime.h>
 // #include <stdio.h>
+#include <cublas_v2.h>
 
 #define TILE_SIZE 16
+
+
+__global__ void add_bias(float* C, float* bias, int batch, int out_f) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= batch * out_f) return;
+    int col = idx % out_f;
+    C[idx] += bias[col];
+}
+
+// cuBLAS uses column-major storage but our data is row-major.
+// We exploit the identity: (A * B^T)^T = B * A^T
+// So instead of computing C = A * B^T directly,
+// we compute C^T = B * A^T and let cuBLAS handle the transpose.
+//
+// cublasSgemm computes: C = alpha * op(A) * op(B) + beta * C
+// We call it as:        C = 1.0 * B * A^T + 0.0 * C
+void launch_matmul_cublas(
+    cublasHandle_t handle,
+    float* A, float* B, float* bias, float* C,
+    int batch, int in_f, int out_f)
+{
+    float alpha = 1.0f, beta = 0.0f;
+
+    // cublasSgemm(handle,
+    //   transB, transA,        -- operations on B and A
+    //   m, n, k,               -- output is [m x n], inner dim k
+    //   &alpha,
+    //   B, ldb,                -- first matrix
+    //   A, lda,                -- second matrix
+    //   &beta,
+    //   C, ldc)                -- output
+    //
+    // Our matmul: C[batch, out_f] = A[batch, in_f] * B^T[in_f, out_f]
+    // m=out_f, n=batch, k=in_f
+    cublasSgemm(handle,
+        CUBLAS_OP_T, CUBLAS_OP_N,
+        out_f, batch, in_f,
+        &alpha,
+        B, in_f,
+        A, in_f,
+        &beta,
+        C, out_f);
+
+    // Add bias — reuse our existing relu kernel infrastructure
+    // bias is [out_f], C is [batch, out_f]
+    // We add bias to each row using a simple kernel
+    add_bias<<<(batch * out_f + 255) / 256, 256>>>(C, bias, batch, out_f);
+    cudaDeviceSynchronize();
+}
 
 // Naive kernel
 // Each thread computes one element of C
