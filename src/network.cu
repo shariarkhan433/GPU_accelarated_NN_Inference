@@ -48,19 +48,19 @@ Tensor<T> Network<T>::forward_gpu(Tensor<T>& input, size_t batch_size) {
 
     // Layer 1: [batch, 784] -> [batch, 128]
     Tensor<T> out1(batch_size * 128, Device::GPU);
-    launch_matmul_naive(input.data, fc1.weights.data, fc1.bias.data,
+    launch_matmul_tiled(input.data, fc1.weights.data, fc1.bias.data,
                         out1.data, (int)batch_size, 784, 128);
     out1.to_cpu(); relu.forward_cpu(out1); out1.to_gpu();
 
     // Layer 2: [batch, 128] -> [batch, 64]
     Tensor<T> out2(batch_size * 64, Device::GPU);
-    launch_matmul_naive(out1.data, fc2.weights.data, fc2.bias.data,
+    launch_matmul_tiled(out1.data, fc2.weights.data, fc2.bias.data,
                         out2.data, (int)batch_size, 128, 64);
     out2.to_cpu(); relu.forward_cpu(out2); out2.to_gpu();
 
     // Layer 3: [batch, 64] -> [batch, 10]
     Tensor<T> out3(batch_size * 10, Device::GPU);
-    launch_matmul_naive(out2.data, fc3.weights.data, fc3.bias.data,
+    launch_matmul_tiled(out2.data, fc3.weights.data, fc3.bias.data,
                         out3.data, (int)batch_size, 64, 10);
     out3.to_cpu(); softmax.forward_cpu(out3, batch_size); out3.to_gpu();
 
