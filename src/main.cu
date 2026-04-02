@@ -1,48 +1,48 @@
+
 #include <iostream>
 #include <iomanip>
-#include <cmath>
+#include <fstream>
+
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include "../include/network.cuh"
 #include "../include/npy.cuh"
 
 int main() {
-    // --- Load test data ---
+    // --- Load test images ---
     std::vector<size_t> shape;
     Tensor<float> images = load_npy("weights/test_images.npy", shape);
     std::cout << "Test images: [" << shape[0] << ", " << shape[1] << "]\n";
 
-    Tensor<float> labels_f = load_npy("weights/test_labels.npy", shape);
-    std::cout << "Test labels: [" << shape[0] << "]\n";
-
+    // --- Load int64 labels directly (npy dtype is int64, not float) ---
     size_t n_samples = 1000;
-
-    // Convert float labels to int
     std::vector<int> labels(n_samples);
-    for (size_t i = 0; i < n_samples; i++)
-        labels[i] = (int)labels_f.data[i];
+    {
+        std::ifstream f("weights/test_labels.npy", std::ios::binary);
+        // npy header: 6-byte magic + 2-byte version + 2-byte header_len + header_len bytes
+        uint8_t magic[6]; f.read((char*)magic, 6);
+        uint8_t major, minor; f.read((char*)&major, 1); f.read((char*)&minor, 1);
+        uint16_t hlen; f.read((char*)&hlen, 2);
+        std::string header(hlen, ' '); f.read(header.data(), hlen);
+        // raw data: n_samples × int64 little-endian
+        for (size_t i = 0; i < n_samples; i++) {
+            int64_t v; f.read((char*)&v, 8);
+            labels[i] = (int)v;
+        }
+        std::cout << "Test labels: [" << n_samples << "]  (first 5: ";
+        for (int i = 0; i < 5; i++) std::cout << labels[i] << " ";
+        std::cout << ")\n";
+    }
 
     // --- Build network and load weights ---
     Network<float> net;
     net.load_weights("weights");
-    
-// Debug: print first 5 weights of fc1
-std::cout << "fc1 w[0..4]: ";
-for (int i = 0; i < 5; i++)
-    std::cout << net.fc1.weights.data[i] << " ";
-std::cout << "\n";
 
-// Debug: print first 5 values of test image 0
-std::cout << "image[0][0..4]: ";
-for (int i = 0; i < 5; i++)
-    std::cout << images.data[i] << " ";
-std::cout << "\n";
     // --- CPU inference ---
     Tensor<float> cpu_out = net.forward_cpu(images, n_samples);
 
     int cpu_correct = 0;
     for (size_t i = 0; i < n_samples; i++) {
-        // Find argmax of output row i
         int pred = 0;
         float best = cpu_out.data[i * 10];
         for (int j = 1; j < 10; j++) {
