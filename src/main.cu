@@ -9,12 +9,12 @@
 #include "../include/npy.cuh"
 
 int main() {
-    // --- Load test images ---
+    
     std::vector<size_t> shape;
     Tensor<float> images = load_npy("weights/test_images.npy", shape);
     std::cout << "Test images: [" << shape[0] << ", " << shape[1] << "]\n";
 
-    // --- Load int64 labels directly (npy dtype is int64, not float) ---
+    
     size_t n_samples = 1000;
     std::vector<int> labels(n_samples);
     {
@@ -34,7 +34,7 @@ int main() {
         std::cout << ")\n";
     }
 
-    // --- Build network and load weights ---
+    
     Network<float> net;
     net.load_weights("weights");
 
